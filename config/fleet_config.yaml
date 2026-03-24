@@ -1,0 +1,16 @@
+# Single source of truth for proximity wait fleet definitions
+
+# List of robot namespaces in the swarm
+# Adding or removing a robot here automatically updates TF monitoring across the fleet.
+fleet_namespaces:
+  - agent1
+  - agent2
+
+# Frame suffix for each robot (e.g. 'base_link' -> 'agent1/base_link')
+frame_suffix: "base_link"
+
+# Distance threshold (metres) to trigger a pause (FAILURE)
+safety_radius: 1.0
+
+# Distance threshold (metres) to resume navigation (SUCCESS) - must be > safety_radius
+clear_radius: 1.5

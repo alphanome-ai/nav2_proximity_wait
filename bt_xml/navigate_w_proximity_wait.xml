@@ -1,0 +1,80 @@
+<!--
+  navigate_w_proximity_wait.xml
+
+  Based on the standard Nav2 navigate_to_pose_w_replanning_and_recovery tree.
+
+  Modification: a ReactiveFallback ("ProximityWaitFallback") is inserted as
+  a sibling inside PipelineSequence, between path computation and FollowPath.
+
+  On every BT tick:
+    - CheckRobotProximity returns SUCCESS  → PipelineSequence advances to FollowPath normally
+    - CheckRobotProximity returns FAILURE  → ReactiveFallback ticks Wait (robot holds position)
+    - Once clear, Wait is halted automatically and FollowPath resumes
+
+  NOTE: CheckRobotProximity reads other_robot_frames, safety_radius, and
+  clear_radius directly from ROS node parameters (set by bt_navigator from the
+  merged nav2 params YAML).  The BT ports are declared for compatibility but the
+  node does NOT use BT blackboard values for these three inputs.
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+
+        <!-- Step 1: Replan the global path at 1 Hz -->
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context"
+              service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+
+        <!-- Step 2+3: ReactiveSequence gates FollowPath behind the proximity check.
+
+             ReactiveSequence re-ticks child 1 (CheckRobotProximity) EVERY tick:
+               CheckRobotProximity SUCCESS  → ReactiveSequence ticks FollowPath normally
+               CheckRobotProximity RUNNING  → ReactiveSequence HALTS FollowPath immediately
+                                              (robot stops, BT yields — no spin-loop)
+
+             Priority: the robot with the lower numeric agent ID has right-of-way
+             and CheckRobotProximity always returns SUCCESS for it. The higher-ID
+             robot yields (RUNNING) until the area is clear. This prevents deadlock
+             when both robots spawn inside the safety radius of each other.
+
+             No Wait node needed — CheckRobotProximity stays RUNNING for as long
+             as the other robot is within clear_radius (hysteresis). -->
+        <ReactiveSequence name="ProximityGatedFollow">
+
+          <CheckRobotProximity/>
+
+          <!-- FollowPath only runs while CheckRobotProximity returns SUCCESS -->
+          <RecoveryNode number_of_retries="1" name="FollowPath">
+            <FollowPath path="{path}" controller_id="FollowPath"/>
+            <ClearEntireCostmap name="ClearLocalCostmap-Context"
+              service_name="local_costmap/clear_entirely_local_costmap"/>
+          </RecoveryNode>
+
+        </ReactiveSequence>
+
+      </PipelineSequence>
+
+      <!-- Recovery branch — unchanged from standard Nav2 tree -->
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <Sequence name="ClearingActions">
+            <ClearEntireCostmap name="ClearLocalCostmap-Subtree"
+              service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Subtree"
+              service_name="global_costmap/clear_entirely_global_costmap"/>
+          </Sequence>
+          <Spin spin_dist="1.57"/>
+          <Wait wait_duration="5"/>
+          <BackUp backup_dist="0.30" backup_speed="0.05"/>
+        </RoundRobin>
+      </ReactiveFallback>
+
+    </RecoveryNode>
+  </BehaviorTree>
+</root>
